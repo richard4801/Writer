@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { Send, Loader2 } from "lucide-react";
+import { streamWrite } from "@/lib/claude";
 import type { WritingMode, AIMessage, Project } from "@/lib/types";
 
 interface AIPanelProps {
@@ -37,40 +38,24 @@ export default function AIPanel({ mode, project, sceneContent, onInsert }: AIPan
     setStreamBuffer("");
 
     try {
-      const res = await fetch("/api/write", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: nextMessages,
-          mode,
-          project: {
-            title: project?.title ?? "",
-            genre: project?.genre ?? "",
-            synopsis: project?.synopsis ?? "",
-            styleNotes: project?.styleNotes ?? "",
-            characters: project?.characters ?? "",
-            worldNotes: project?.worldNotes ?? "",
-          },
-          sceneContext: sceneContent,
-        }),
+      const full = await streamWrite({
+        messages: nextMessages,
+        mode,
+        project: {
+          title: project?.title ?? "",
+          genre: project?.genre ?? "",
+          synopsis: project?.synopsis ?? "",
+          styleNotes: project?.styleNotes ?? "",
+          characters: project?.characters ?? "",
+          worldNotes: project?.worldNotes ?? "",
+        },
+        sceneContext: sceneContent,
+        onChunk: (text) => setStreamBuffer(text),
       });
-
-      if (!res.ok || !res.body) throw new Error("Stream failed");
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let full = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        full += chunk;
-        setStreamBuffer(full);
-      }
-
       setMessages((prev) => [...prev, { role: "assistant", content: full }]);
-    } catch {
-      setMessages((prev) => [...prev, { role: "assistant", content: "Something went wrong. Please try again." }]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Something went wrong.";
+      setMessages((prev) => [...prev, { role: "assistant", content: msg }]);
     } finally {
       setStreaming(false);
       setStreamBuffer("");
@@ -87,17 +72,13 @@ export default function AIPanel({ mode, project, sceneContent, onInsert }: AIPan
 
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         {messages.length === 0 && (
-          <p className="text-sm text-gray-400 italic mt-4">
-            {MODE_PLACEHOLDERS[mode]}
-          </p>
+          <p className="text-sm text-gray-400 italic mt-4">{MODE_PLACEHOLDERS[mode]}</p>
         )}
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
             <div
               className={`inline-block max-w-full text-sm rounded-lg px-3 py-2 whitespace-pre-wrap leading-relaxed ${
-                m.role === "user"
-                  ? "bg-blue-50 text-gray-800"
-                  : "bg-gray-50 text-gray-800"
+                m.role === "user" ? "bg-blue-50 text-gray-800" : "bg-gray-50 text-gray-800"
               }`}
             >
               {m.content}
@@ -132,7 +113,12 @@ export default function AIPanel({ mode, project, sceneContent, onInsert }: AIPan
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
           placeholder="Ask Claude…"
           rows={2}
           className="flex-1 text-sm resize-none border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200 font-sans"
